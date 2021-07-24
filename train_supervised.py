@@ -25,6 +25,7 @@ from util import adjust_learning_rate, accuracy, AverageMeter
 from eval.meta_eval import meta_test
 from eval.cls_eval import validate
 
+import torch_optimizer
 
 def parse_option():
 
@@ -45,6 +46,7 @@ def parse_option():
     parser.add_argument('--weight_decay', type=float, default=5e-4, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('--adam', action='store_true', help='use adam optimizer')
+    parser.add_argument('--radam', action='store_true', help='use Radam optimizer')
 
     # dataset
     parser.add_argument('--model', type=str, default='resnet12', choices=model_pool)
@@ -53,8 +55,8 @@ def parse_option():
     parser.add_argument('--transform', type=str, default='A', choices=transforms_list)
     parser.add_argument('--use_trainval', action='store_true', help='use trainval set')
 
-    # cosine annealing
-    parser.add_argument('--cosine', action='store_true', help='using cosine annealing')
+    # learning rate scheduler
+    parser.add_argument('--scheduler', type=str, default='default', help='using cosine annealing', choices=['default', 'cosine', 'reducelronplateau'])
 
     # specify folder
     parser.add_argument('--model_path', type=str, default='', help='path to save model')
@@ -77,6 +79,10 @@ def parse_option():
 
     parser.add_argument('-t', '--trial', type=str, default='1', help='the experiment id')
 
+    # specify architectures for DARTS space
+    parser.add_argument('--layers', type=int, default=2, help='number of layers')
+    parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
+    parser.add_argument('--genotype', type=str, default='', help='Cell genotype')
     opt = parser.parse_args()
 
     if opt.dataset == 'CIFAR-FS' or opt.dataset == 'FC100':
@@ -104,11 +110,16 @@ def parse_option():
     opt.model_name = '{}_{}_lr_{}_decay_{}_trans_{}'.format(opt.model, opt.dataset, opt.learning_rate,
                                                             opt.weight_decay, opt.transform)
 
-    if opt.cosine:
+    if opt.scheduler == 'cosine':
         opt.model_name = '{}_cosine'.format(opt.model_name)
+    elif opt.scheduler == 'reducelronplateau':
+        opt.model_name = '{}_rlrplateau'.format(opt.model_name)
 
     if opt.adam:
         opt.model_name = '{}_useAdam'.format(opt.model_name)
+
+    if opt.radam:
+        opt.model_name = '{}_useRAdam'.format(opt.model_name)
 
     opt.model_name = '{}_trial_{}'.format(opt.model_name, opt.trial)
 
@@ -207,13 +218,15 @@ def main():
         raise NotImplementedError(opt.dataset)
 
     # model
-    model = create_model(opt.model, n_cls, opt.dataset)
+    model = create_model(opt.model, n_cls, opt.dataset, args=opt )
 
     # optimizer
     if opt.adam:
         optimizer = torch.optim.Adam(model.parameters(),
                                      lr=opt.learning_rate,
                                      weight_decay=0.0005)
+    elif opt.radam:
+        optimizer = torch_optimizer.RAdam(model.parameters(), lr = opt.learning_rate)
     else:
         optimizer = optim.SGD(model.parameters(),
                               lr=opt.learning_rate,
@@ -232,16 +245,22 @@ def main():
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 
-    # set cosine annealing scheduler
-    if opt.cosine:
+    # set learning rate scheduler
+    if opt.scheduler == 'cosine':
         eta_min = opt.learning_rate * (opt.lr_decay_rate ** 3)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, opt.epochs, eta_min, -1)
+    elif opt.scheduler == 'reducelronplateau':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
+    best_acc = 0
+    best_epoch = 0
     # routine: supervised pre-training
     for epoch in range(1, opt.epochs + 1):
 
-        if opt.cosine:
+        if opt.scheduler == 'cosine':
             scheduler.step()
+        elif opt.scheduler == 'reducelronplateau':
+            pass
         else:
             adjust_learning_rate(epoch, opt, optimizer)
         print("==> training...")
@@ -270,6 +289,20 @@ def main():
             save_file = os.path.join(opt.save_folder, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
             torch.save(state, save_file)
 
+        if test_acc > best_acc:
+            best_acc = test_acc
+            best_epoch = epoch
+            print('==> Saving...')
+            state = {
+                'epoch': epoch,
+                'model': model.state_dict() if opt.n_gpu <= 1 else model.module.state_dict(),
+            }
+            save_file = os.path.join(opt.save_folder, 'ckpt_best.pth')
+            torch.save(state, save_file)
+
+        if opt.scheduler == 'reducelronplateau':
+            scheduler.step(test_acc)
+
     # save the last model
     state = {
         'opt': opt,
@@ -277,6 +310,7 @@ def main():
     }
     save_file = os.path.join(opt.save_folder, '{}_last.pth'.format(opt.model))
     torch.save(state, save_file)
+    print('Best Acc is at epoch {} with accuracy: {} '.format(best_epoch, best_acc))
 
 
 def train(epoch, train_loader, model, criterion, optimizer, opt):

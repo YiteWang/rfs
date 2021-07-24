@@ -2,7 +2,7 @@ from __future__ import print_function
 
 import os
 import argparse
-import socket
+# import socket
 import time
 import sys
 
@@ -11,7 +11,7 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 
 from models import model_dict, model_pool
-from models.util import create_model
+from models.util import create_model, count_params
 
 from dataset.mini_imagenet import ImageNet, MetaImageNet
 from dataset.tiered_imagenet import TieredImageNet, MetaTieredImageNet
@@ -19,11 +19,11 @@ from dataset.cifar import CIFAR100, MetaCIFAR100
 from dataset.transform_cfg import transforms_options, transforms_list
 
 from eval.meta_eval import meta_test
-
+from ptflops import get_model_complexity_info
 
 def parse_option():
 
-    hostname = socket.gethostname()
+    # hostname = socket.gethostname()
 
     parser = argparse.ArgumentParser('argument for training')
 
@@ -53,7 +53,13 @@ def parse_option():
                         help='Number of workers for dataloader')
     parser.add_argument('--test_batch_size', type=int, default=1, metavar='test_batch_size',
                         help='Size of test batch)')
+    # specify architectures for DARTS space
+    parser.add_argument('--layers', type=int, default=2, help='number of layers')
+    parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
+    parser.add_argument('--genotype', type=str, default='', help='Cell genotype')
 
+    # Parameters for Logistic regression
+    parser.add_argument('--C', type=float, default=1.0, help='coefficient of Logistic Regression')
     opt = parser.parse_args()
 
     if 'trainval' in opt.model_path:
@@ -62,16 +68,18 @@ def parse_option():
         opt.use_trainval = False
 
     # set the path according to the environment
-    if hostname.startswith('visiongpu'):
-        opt.data_root = '/data/vision/phillipi/rep-learn/{}'.format(opt.dataset)
-        opt.data_aug = True
-    elif hostname.startswith('instance'):
-        opt.data_root = '/mnt/globalssd/fewshot/{}'.format(opt.dataset)
-        opt.data_aug = True
-    elif opt.data_root != 'data':
-        opt.data_aug = True
-    else:
-        raise NotImplementedError('server invalid: {}'.format(hostname))
+    # if hostname.startswith('visiongpu'):
+    #     opt.data_root = '/data/vision/phillipi/rep-learn/{}'.format(opt.dataset)
+    #     opt.data_aug = True
+    # elif hostname.startswith('instance'):
+    #     opt.data_root = '/mnt/globalssd/fewshot/{}'.format(opt.dataset)
+    #     opt.data_aug = True
+    # elif opt.data_root != 'data':
+    #     opt.data_aug = True
+    # else:
+    #     raise NotImplementedError('server invalid: {}'.format(hostname))
+    opt.data_root = '/home/yitew2/data/{}'.format(opt.dataset)
+    opt.data_aug = True
 
     return opt
 
@@ -148,7 +156,7 @@ def main():
         raise NotImplementedError(opt.dataset)
 
     # load model
-    model = create_model(opt.model, n_cls, opt.dataset)
+    model = create_model(opt.model, n_cls, opt.dataset, args=opt )
     ckpt = torch.load(opt.model_path)
     model.load_state_dict(ckpt['model'])
 
@@ -156,28 +164,38 @@ def main():
         model = model.cuda()
         cudnn.benchmark = True
 
+    # Calculate model size & number of flops
+    print('Number of parameters: {}'.format(count_params(model)))
+
+    support_xs, _, _, _ = next(iter(meta_testloader))
+    batch_size, _, channel, height, width = support_xs.size()
+    macs, params = get_model_complexity_info(model, (channel, height, width), as_strings=True,
+                                           print_per_layer_stat=True, verbose=True)
+    print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
+    print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+
     # evalation
     start = time.time()
-    val_acc, val_std = meta_test(model, meta_valloader)
+    val_acc, val_std = meta_test(model, meta_valloader, C=opt.C)
     val_time = time.time() - start
     print('val_acc: {:.4f}, val_std: {:.4f}, time: {:.1f}'.format(val_acc, val_std,
                                                                   val_time))
 
     start = time.time()
-    val_acc_feat, val_std_feat = meta_test(model, meta_valloader, use_logit=False)
+    val_acc_feat, val_std_feat = meta_test(model, meta_valloader, use_logit=False, C=opt.C)
     val_time = time.time() - start
     print('val_acc_feat: {:.4f}, val_std: {:.4f}, time: {:.1f}'.format(val_acc_feat,
                                                                        val_std_feat,
                                                                        val_time))
 
     start = time.time()
-    test_acc, test_std = meta_test(model, meta_testloader)
+    test_acc, test_std = meta_test(model, meta_testloader, C=opt.C)
     test_time = time.time() - start
     print('test_acc: {:.4f}, test_std: {:.4f}, time: {:.1f}'.format(test_acc, test_std,
                                                                     test_time))
 
     start = time.time()
-    test_acc_feat, test_std_feat = meta_test(model, meta_testloader, use_logit=False)
+    test_acc_feat, test_std_feat = meta_test(model, meta_testloader, use_logit=False, C=opt.C)
     test_time = time.time() - start
     print('test_acc_feat: {:.4f}, test_std: {:.4f}, time: {:.1f}'.format(test_acc_feat,
                                                                          test_std_feat,

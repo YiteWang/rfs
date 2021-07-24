@@ -2,9 +2,12 @@ from __future__ import print_function
 
 
 from . import model_dict
+  
+from collections import namedtuple
 
+Genotype = namedtuple('Genotype', 'normal normal_concat reduce reduce_concat')
 
-def create_model(name, n_cls, dataset='miniImageNet'):
+def create_model(name, n_cls, dataset='miniImageNet', args=None):
     """create model by name"""
     if dataset == 'miniImageNet' or dataset == 'tieredImageNet':
         if name.endswith('v2') or name.endswith('v3'):
@@ -18,6 +21,11 @@ def create_model(name, n_cls, dataset='miniImageNet'):
             model = model_dict[name](num_classes=n_cls)
         elif name.startswith('convnet'):
             model = model_dict[name](num_classes=n_cls)
+        elif name.startswith('dartsmodel'):
+            assert args is not None
+            assert args.genotype != ''
+            genotype = eval(args.genotype)
+            model = model_dict[name](args, args.init_channels, n_cls, args.layers, criterion=None, auxiliary=None, genotype=genotype) 
         else:
             raise NotImplementedError('model {} not supported in dataset {}:'.format(name, dataset))
     elif dataset == 'CIFAR-FS' or dataset == 'FC100':
@@ -32,7 +40,9 @@ def create_model(name, n_cls, dataset='miniImageNet'):
 
     return model
 
-
+def count_params(net):
+    return sum(p.numel() for p in net.parameters())
+    
 def get_teacher_name(model_path):
     """parse to get teacher model name"""
     segments = model_path.split('/')[-2].split('_')

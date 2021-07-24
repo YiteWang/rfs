@@ -30,7 +30,7 @@ def normalize(x):
     return out
 
 
-def meta_test(net, testloader, use_logit=True, is_norm=True, classifier='LR', opt=None):
+def meta_test(net, testloader, use_logit=True, is_norm=True, classifier='LR', opt=None, C=1.0):
     net = net.eval()
     acc = []
 
@@ -66,7 +66,7 @@ def meta_test(net, testloader, use_logit=True, is_norm=True, classifier='LR', op
             if classifier == 'LR':
                 clf = LogisticRegression(penalty='l2',
                                          random_state=0,
-                                         C=1.0,
+                                         C=C,
                                          solver='lbfgs',
                                          max_iter=1000,
                                          multi_class='multinomial')
