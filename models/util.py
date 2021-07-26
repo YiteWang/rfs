@@ -26,6 +26,11 @@ def create_model(name, n_cls, dataset='miniImageNet', args=None):
             assert args.genotype != ''
             genotype = eval(args.genotype)
             model = model_dict[name](args, args.init_channels, n_cls, args.layers, criterion=None, auxiliary=None, genotype=genotype) 
+        elif name == 'augmentcnn':
+            assert args is not None
+            assert args.genotype != ''
+            genotype = eval(args.genotype)
+            model = model_dict[name](input_size=args.input_size, C_in=args.n_input_channels, C=args.init_channels, n_classes=n_cls, n_layers=args.layers, auxiliary=False, genotype=genotype, stem_multiplier=3, feature_scale_rate=1)
         else:
             raise NotImplementedError('model {} not supported in dataset {}:'.format(name, dataset))
     elif dataset == 'CIFAR-FS' or dataset == 'FC100':

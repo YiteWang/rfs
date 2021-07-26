@@ -14,7 +14,7 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 
 from models import model_pool
-from models.util import create_model
+from models.util import create_model, count_params
 
 from dataset.mini_imagenet import ImageNet, MetaImageNet
 from dataset.tiered_imagenet import TieredImageNet, MetaTieredImageNet
@@ -24,6 +24,8 @@ from dataset.transform_cfg import transforms_options, transforms_list
 from util import adjust_learning_rate, accuracy, AverageMeter
 from eval.meta_eval import meta_test
 from eval.cls_eval import validate
+
+from ptflops import get_model_complexity_info
 
 import torch_optimizer
 
@@ -80,7 +82,9 @@ def parse_option():
     parser.add_argument('-t', '--trial', type=str, default='1', help='the experiment id')
 
     # specify architectures for DARTS space
-    parser.add_argument('--layers', type=int, default=2, help='number of layers')
+    # should be 2 for dartsmodel, 4 for metanas(normal),  5 for metanas(upscale)
+    parser.add_argument('--layers', type=int, default=2, help='number of layers')  
+    # should be 16 for dartsmodel, 28 for metanas(normal), 96 for metanas(upscale)
     parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
     parser.add_argument('--genotype', type=str, default='', help='Cell genotype')
     opt = parser.parse_args()
@@ -217,9 +221,21 @@ def main():
     else:
         raise NotImplementedError(opt.dataset)
 
+    support_xs, _, _, _ = next(iter(meta_testloader))
+    batch_size, _, channel, height, width = support_xs.size()
+
+    # Get input channel/size for creating augmentcnn model
+    if opt.model == 'augmentcnn':
+        assert height == width
+        opt.n_input_channels = channel
+        opt.input_size = height
+ 
     # model
     model = create_model(opt.model, n_cls, opt.dataset, args=opt )
 
+    # Calculate model size & number of flops
+    print('Number of parameters: {}'.format(count_params(model)))
+    
     # optimizer
     if opt.adam:
         optimizer = torch.optim.Adam(model.parameters(),
@@ -242,6 +258,12 @@ def main():
         criterion = criterion.cuda()
         cudnn.benchmark = True
 
+    macs, params = get_model_complexity_info(model, (channel, height, width), as_strings=True,
+                                           print_per_layer_stat=True, verbose=True)
+
+    print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
+    print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+    
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 

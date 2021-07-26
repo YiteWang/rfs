@@ -60,6 +60,8 @@ def parse_option():
 
     # Parameters for Logistic regression
     parser.add_argument('--C', type=float, default=1.0, help='coefficient of Logistic Regression')
+    parser.add_argument('--nonorm', action='store_false', dest='norm', help='if normalize feature, default: True')
+
     opt = parser.parse_args()
 
     if 'trainval' in opt.model_path:
@@ -155,6 +157,15 @@ def main():
     else:
         raise NotImplementedError(opt.dataset)
 
+    support_xs, _, _, _ = next(iter(meta_testloader))
+    batch_size, _, channel, height, width = support_xs.size()
+
+    # Get input channel/size for creating augmentcnn model
+    if opt.model == 'augmentcnn':
+        assert height == width
+        opt.n_input_channels = channel
+        opt.input_size = height
+
     # load model
     model = create_model(opt.model, n_cls, opt.dataset, args=opt )
     ckpt = torch.load(opt.model_path)
@@ -167,35 +178,35 @@ def main():
     # Calculate model size & number of flops
     print('Number of parameters: {}'.format(count_params(model)))
 
-    support_xs, _, _, _ = next(iter(meta_testloader))
-    batch_size, _, channel, height, width = support_xs.size()
     macs, params = get_model_complexity_info(model, (channel, height, width), as_strings=True,
                                            print_per_layer_stat=True, verbose=True)
+
     print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
     print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+    print('Use norm:{}'.format(args.norm))
 
     # evalation
     start = time.time()
-    val_acc, val_std = meta_test(model, meta_valloader, C=opt.C)
+    val_acc, val_std = meta_test(model, meta_valloader, is_norm=args.norm, C=opt.C)
     val_time = time.time() - start
     print('val_acc: {:.4f}, val_std: {:.4f}, time: {:.1f}'.format(val_acc, val_std,
                                                                   val_time))
 
     start = time.time()
-    val_acc_feat, val_std_feat = meta_test(model, meta_valloader, use_logit=False, C=opt.C)
+    val_acc_feat, val_std_feat = meta_test(model, meta_valloader, use_logit=False, is_norm=args.norm, C=opt.C)
     val_time = time.time() - start
     print('val_acc_feat: {:.4f}, val_std: {:.4f}, time: {:.1f}'.format(val_acc_feat,
                                                                        val_std_feat,
                                                                        val_time))
 
     start = time.time()
-    test_acc, test_std = meta_test(model, meta_testloader, C=opt.C)
+    test_acc, test_std = meta_test(model, meta_testloader, is_norm=args.norm, C=opt.C)
     test_time = time.time() - start
     print('test_acc: {:.4f}, test_std: {:.4f}, time: {:.1f}'.format(test_acc, test_std,
                                                                     test_time))
 
     start = time.time()
-    test_acc_feat, test_std_feat = meta_test(model, meta_testloader, use_logit=False, C=opt.C)
+    test_acc_feat, test_std_feat = meta_test(model, meta_testloader, use_logit=False, is_norm=args.norm, C=opt.C)
     test_time = time.time() - start
     print('test_acc_feat: {:.4f}, test_std: {:.4f}, time: {:.1f}'.format(test_acc_feat,
                                                                          test_std_feat,

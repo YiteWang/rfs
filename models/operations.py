@@ -20,6 +20,47 @@ OPS = {
     ),
 }
 
+def drop_path_(x, drop_prob, training):
+    if training and drop_prob > 0.0:
+        keep_prob = 1.0 - drop_prob
+        # per data point mask; assuming x in cuda.
+        mask = torch.cuda.FloatTensor(x.size(0), 1, 1, 1).bernoulli_(keep_prob)
+        x.div_(keep_prob).mul_(mask)
+
+    return x
+
+class StdConv(nn.Module):
+    """Standard conv
+    ReLU - Conv - BN
+    """
+
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.ReLU(),
+            nn.Conv2d(C_in, C_out, kernel_size, stride, padding, bias=False),
+            nn.BatchNorm2d(C_out, affine=affine),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class DropPath_(nn.Module):
+    def __init__(self, p=0.0):
+        """[!] DropPath is inplace module
+        Args:
+            p: probability of an path to be zeroed.
+        """
+        super().__init__()
+        self.p = p
+
+    def extra_repr(self):
+        return f"p={self.p}, inplace"
+
+    def forward(self, x):
+        drop_path_(x, self.p, self.training)
+
+        return x
 
 class ReLUConvBN(nn.Module):
     def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
